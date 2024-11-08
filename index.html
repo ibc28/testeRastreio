@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Mapeando Passos com Ritmo e Distância</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <style>
+    #map {
+      height: 80vh; /* Altura do mapa */
+    }
+    #controle {
+      display: flex;
+      justify-content: center;
+      margin: 10px;
+    }
+    #botao-iniciar, #botao-pausar {
+      margin-left: 10px;
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #precisao {
+      font-size: 16px;
+      padding: 5px;
+    }
+    #contador, #distancia, #ritmo {
+      font-size: 16px;
+      margin-left: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div id="controle">
+    <select id="precisao">
+      <option value="forte">Forte (Alta precisão)</option>
+      <option value="media">Média (Precisão razoável)</option>
+      <option value="fraca">Fraca (Até 10m de variação)</option>
+    </select>
+    <button id="botao-iniciar">Iniciar Rastreamento</button>
+    <button id="botao-pausar" disabled>Pausar</button>
+    <span id="contador">00:00</span>
+    <span id="distancia">0.00 km</span>
+    <span id="ritmo">--:-- min/km</span>
+  </div>
+  <script>
+    // Inicialize o mapa
+    var map = L.map('map').setView([0, 0], 13);
+
+    // Adicione o tile layer (camada do mapa)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 18,
+    }).addTo(map);
+
+    // Array para armazenar as coordenadas do trajeto
+    var caminho = [];
+
+    // Polyline para desenhar o trajeto
+    var polyline = L.polyline(caminho, { color: 'blue' }).addTo(map);
+
+    // Variáveis para o rastreamento, o contador de tempo e a distância
+    var rastreamentoAtivo = false;
+    var intervalo = null;
+    var segundos = 0;
+    var watchId = null;
+    var distanciaTotal = 0; // Distância total percorrida em metros
+
+    // Função para formatar o tempo em mm:ss
+    function formatarTempo(segundos) {
+      var minutos = Math.floor(segundos / 60);
+      var segundosRestantes = segundos % 60;
+      return (
+        (minutos < 10 ? '0' : '') + minutos + ':' + (segundosRestantes < 10 ? '0' : '') + segundosRestantes
+      );
+    }
+
+    // Função para formatar a distância em quilômetros com duas casas decimais
+    function formatarDistancia(distanciaEmMetros) {
+      var distanciaEmKm = distanciaEmMetros / 1000;
+      return distanciaEmKm.toFixed(2) + " km";
+    }
+
+    // Função para calcular e formatar o ritmo (min/km)
+    function calcularRitmo(segundos, distanciaEmMetros) {
+      if (distanciaEmMetros === 0) return "--:-- min/km"; // Evita divisão por zero
+
+      var distanciaEmKm = distanciaEmMetros / 1000;
+      var tempoEmMinutos = segundos / 60;
+      var ritmo = tempoEmMinutos / distanciaEmKm;
+      var minutos = Math.floor(ritmo);
+      var segundosRestantes = Math.round((ritmo - minutos) * 60);
+
+      return (
+        (minutos < 10 ? '0' : '') + minutos + ':' + (segundosRestantes < 10 ? '0' : '') + segundosRestantes + ' min/km'
+      );
+    }
+
+    // Função para iniciar o rastreamento
+    function iniciarRastreamento() {
+      if (!rastreamentoAtivo) {
+        rastreamentoAtivo = true;
+        document.getElementById('botao-pausar').disabled = false;
+        document.getElementById('botao-iniciar').disabled = true;
+
+        // Atualiza o contador a cada segundo
+        intervalo = setInterval(function() {
+          segundos++;
+          document.getElementById('contador').textContent = formatarTempo(segundos);
+
+          // Atualiza o ritmo
+          document.getElementById('ritmo').textContent = calcularRitmo(segundos, distanciaTotal);
+        }, 1000);
+
+        // Obtenha o nível de precisão selecionado
+        var precisao = document.getElementById('precisao').value;
+        var options = {
+          enableHighAccuracy: false, // Padrão para média ou fraca
+          maximumAge: 0,
+          timeout: 10000 // Timeout de 10 segundos
+        };
+
+        if (precisao === 'forte') {
+          options.enableHighAccuracy = true; // Alta precisão
+        } else if (precisao === 'fraca') {
+          options.maximumAge = 10000; // Permite dados de até 10 segundos
+        }
+
+        if (navigator.geolocation) {
+          watchId = navigator.geolocation.watchPosition(function(position) {
+            var latitude = position.coords.latitude;
+            var longitude = position.coords.longitude;
+            var accuracy = position.coords.accuracy; // Precisão em metros
+
+            // Adicione a nova coordenada ao caminho se a precisão for aceitável
+            if (precisao === 'fraca' && accuracy > 10) {
+              return; // Ignora se a precisão for pior que 10 metros
+            }
+
+            var novaCoordenada = [latitude, longitude];
+
+            // Se já existir uma coordenada anterior, calcule a distância entre elas
+            if (caminho.length > 0) {
+              var ultimaCoordenada = caminho[caminho.length - 1];
+              var distancia = map.distance(ultimaCoordenada, novaCoordenada);
+              distanciaTotal += distancia; // Soma a distância ao total
+              document.getElementById('distancia').textContent = formatarDistancia(distanciaTotal);
+              document.getElementById('ritmo').textContent = calcularRitmo(segundos, distanciaTotal); // Atualiza o ritmo
+            }
+
+            // Adicione a nova coordenada ao caminho
+            caminho.push(novaCoordenada);
+
+            // Atualize a polyline com as novas coordenadas
+            polyline.setLatLngs(caminho);
+
+            // Centralize o mapa na nova localização
+            map.setView(novaCoordenada, 13);
+          }, function() {
+            alert('Não foi possível obter sua localização.');
+          }, options);
+        } else {
+          alert('Geolocalização não é suportada pelo seu navegador.');
+        }
+      }
+    }
+
+    // Função para pausar o rastreamento
+    function pausarRastreamento() {
+      if (rastreamentoAtivo) {
+        rastreamentoAtivo = false;
+        clearInterval(intervalo); // Para o contador de tempo
+        document.getElementById('botao-pausar').disabled = true;
+        document.getElementById('botao-iniciar').disabled = false;
+
+        if (navigator.geolocation && watchId !== null) {
+          navigator.geolocation.clearWatch(watchId); // Para o rastreamento de localização
+        }
+      }
+    }
+
+    // Adicione eventos de clique aos botões
+    document.getElementById('botao-iniciar').addEventListener('click', iniciarRastreamento);
+    document.getElementById('botao-pausar').addEventListener('click', pausarRastreamento);
+  </script>
+</body>
+</html>
